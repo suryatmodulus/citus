@@ -572,6 +572,12 @@ SupportedDependencyByCitus(const ObjectAddress *address)
 			return true;
 		}
 
+		case OCLASS_DATABASE:
+		{
+			/* only to propagate its owner */
+			return true;
+		}
+
 		case OCLASS_ROLE:
 		{
 			/*
