@@ -87,7 +87,7 @@ static uint32 * ReadChunkGroupRowCounts(uint64 storageId, uint64 stripe, uint32
 										chunkGroupCount);
 static Oid ColumnarStorageIdSequenceRelationId(void);
 static Oid ColumnarStripeRelationId(void);
-static Oid ColumnarStripeIndexRelationId(void);
+static Oid ColumnarStripePKeyIndexRelationId(void);
 static Oid ColumnarOptionsRelationId(void);
 static Oid ColumnarOptionsIndexRegclass(void);
 static Oid ColumnarChunkRelationId(void);
@@ -914,7 +914,7 @@ ReadDataFileStripeList(uint64 storageId, Snapshot snapshot)
 	Oid columnarStripesOid = ColumnarStripeRelationId();
 
 	Relation columnarStripes = table_open(columnarStripesOid, AccessShareLock);
-	Relation index = index_open(ColumnarStripeIndexRelationId(), AccessShareLock);
+	Relation index = index_open(ColumnarStripePKeyIndexRelationId(), AccessShareLock);
 	TupleDesc tupleDescriptor = RelationGetDescr(columnarStripes);
 
 	SysScanDesc scanDescriptor = systable_beginscan_ordered(columnarStripes, index,
@@ -982,7 +982,7 @@ DeleteMetadataRows(RelFileNode relfilenode)
 
 	DeleteStorageFromColumnarMetadataTable(ColumnarStripeRelationId(),
 										   Anum_columnar_stripe_storageid,
-										   ColumnarStripeIndexRelationId(),
+										   ColumnarStripePKeyIndexRelationId(),
 										   metapage->storageId);
 	DeleteStorageFromColumnarMetadataTable(ColumnarChunkGroupRelationId(),
 										   Anum_columnar_chunkgroup_storageid,
@@ -1226,11 +1226,11 @@ ColumnarStripeRelationId(void)
 
 
 /*
- * ColumnarStripeIndexRelationId returns relation id of columnar.stripe_pkey.
+ * ColumnarStripePKeyIndexRelationId returns relation id of columnar.stripe_pkey.
  * TODO: should we cache this similar to citus?
  */
 static Oid
-ColumnarStripeIndexRelationId(void)
+ColumnarStripePKeyIndexRelationId(void)
 {
 	return get_relname_relid("stripe_pkey", ColumnarNamespaceId());
 }
