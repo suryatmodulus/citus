@@ -34,6 +34,7 @@
 #include "utils/rel.h"
 
 #include "columnar/columnar.h"
+#include "columnar/columnar_tableam.h"
 #include "columnar/columnar_version_compat.h"
 
 typedef struct ChunkGroupReadState
@@ -154,6 +155,7 @@ ColumnarBeginRead(Relation relation, TupleDesc tupleDescriptor,
 	 * this memory context before loading a new stripe. This is to avoid memory
 	 * leaks.
 	 */
+	/* TODO: to a function */
 	MemoryContext stripeReadContext = AllocSetContextCreate(CurrentMemoryContext,
 															"Stripe Read Memory Context",
 															ALLOCSET_DEFAULT_SIZES);
@@ -223,6 +225,63 @@ ColumnarReadNextRow(ColumnarReadState *readState, Datum *columnValues, bool *col
 
 		return true;
 	}
+
+	return false;
+}
+
+
+bool
+ColumnarReadRowWithNumber(Relation relation, uint64 rowNumber,
+						  Datum *columnValues, bool *columnNulls,
+						  Snapshot snapshot)
+{
+	/*
+	 * find stripe that has the row with rowNumber by using
+	 * first_row_number column, then do the rest
+	 */
+
+	StripeMetadata *stripeMetadata = FindStripeByRowNumber(relation, rowNumber, snapshot);
+	if (stripeMetadata == NULL)
+	{
+		/* no such row exists */
+		return false;
+	}
+
+	TupleDesc relationTupleDesc = RelationGetDescr(relation);
+	List *relationColumnList = RelationColumnList(relationTupleDesc);
+	List *whereClauseList = NIL;
+	MemoryContext stripeReadContext = AllocSetContextCreate(CurrentMemoryContext,
+															"Stripe Read Memory Context",
+															ALLOCSET_DEFAULT_SIZES);
+	StripeReadState *stripeReadState = BeginStripeRead(stripeMetadata,
+												 	   relation,
+												 	   relationTupleDesc,
+												 	   relationColumnList,
+												 	   whereClauseList,
+												 	   stripeReadContext);
+
+	if (rowNumber < stripeMetadata->firstRowNumber)
+	{
+		ereport(ERROR, (errmsg("row offset is negative, not expected")));
+	}
+
+	uint64 stripeRowOffset = rowNumber - stripeMetadata->firstRowNumber;
+	while (true)
+	{
+		if (!ReadStripeNextRow(stripeReadState, columnValues, columnNulls))
+		{
+			ereport(ERROR, (errmsg("reached to the end of the stripe, not expected")));
+		}
+
+		if (stripeReadState->currentRow - 1 == stripeRowOffset)
+		{
+			EndStripeRead(stripeReadState);
+			MemoryContextReset(stripeReadContext);
+			return true;
+		}
+	}
+
+	ereport(ERROR, (errmsg("not expected to reach here")));
 
 	return false;
 }

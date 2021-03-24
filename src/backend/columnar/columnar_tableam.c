@@ -56,6 +56,7 @@
 #include "columnar/columnar_version_compat.h"
 #include "distributed/commands.h"
 #include "distributed/commands/utility_hook.h"
+#include "distributed/listutils.h"
 #include "distributed/metadata_cache.h"
 
 /*
@@ -107,14 +108,22 @@ static bool ConditionalLockRelationWithTimeout(Relation rel, LOCKMODE lockMode,
 static void LogRelationStats(Relation rel, int elevel);
 static void TruncateColumnar(Relation rel, int elevel);
 static HeapTuple ColumnarSlotCopyHeapTuple(TupleTableSlot *slot);
+static void ColumnarSlotGetSomeAttrs(TupleTableSlot *slot, int natts);
 static void ColumnarCheckLogicalReplication(Relation rel);
 static Datum * detoast_values(TupleDesc tupleDesc, Datum *orig_values, bool *isnull);
 static ItemPointerData row_number_to_tid(uint64 rowNumber);
+static uint64 tid_to_row_number(ItemPointerData tid);
+static ColumnarReadState * ColumnarBeginReadForIndexBuild(Relation relation, IndexInfo *indexInfo);
+static List * BuildIndexColumnList(Relation relation, IndexInfo *indexInfo);
+static bool attr_is_array_member(AttrNumber inputAttr, AttrNumber *attrArray, int attrArraySize);
+static void ColumnarReadRowsIntoIndex(ColumnarReadState *readState, Relation indexRelation,
+						  			  IndexInfo *indexInfo, IndexBuildCallback indexCallback,
+						  			  void *indexCallbackState, EState *estate, ExprState *predicate);
 
 /* Custom tuple slot ops used for columnar. Initialized in columnar_tableam_init(). */
 static TupleTableSlotOps TTSOpsColumnar;
 
-static List *
+List *
 RelationColumnList(TupleDesc tupdesc)
 {
 	List *columnList = NIL;
@@ -353,27 +362,27 @@ columnar_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
 static IndexFetchTableData *
 columnar_index_fetch_begin(Relation rel)
 {
-	ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("indexes not supported for columnar tables")));
+	IndexFetchTableData *scan = palloc0(sizeof(IndexFetchTableData));
+	scan->rel = rel;
+	return scan;
 }
 
 
 static void
 columnar_index_fetch_reset(IndexFetchTableData *scan)
 {
-	ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("indexes not supported for columnar tables")));
 }
 
 
 static void
 columnar_index_fetch_end(IndexFetchTableData *scan)
 {
-	ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("indexes not supported for columnar tables")));
+	columnar_index_fetch_reset(scan);
+	pfree(scan);
 }
 
 
+/*TODO: what about call_again ? */
 static bool
 columnar_index_fetch_tuple(struct IndexFetchTableData *scan,
 						   ItemPointer tid,
@@ -381,8 +390,32 @@ columnar_index_fetch_tuple(struct IndexFetchTableData *scan,
 						   TupleTableSlot *slot,
 						   bool *call_again, bool *all_dead)
 {
-	ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("indexes not supported for columnar tables")));
+	//*all_dead = false;
+	ExecClearTuple(slot);
+
+	uint64 rowNumber = tid_to_row_number(*tid);
+	if (!ColumnarReadRowWithNumber(scan->rel, rowNumber, slot->tts_values,
+								   slot->tts_isnull, snapshot))
+	{
+		return false;
+	}
+
+	ExecStoreVirtualTuple(slot);
+
+	/* TODO: before or after ExecStoreVirtualTuple */
+	/* TODO: something like heap_hot_search_buffer ? */
+	slot->tts_tableOid = RelationGetRelid(scan->rel);
+	slot->tts_tid = *tid;
+
+	return true;
+}
+
+
+static uint64
+tid_to_row_number(ItemPointerData tid)
+{
+    const OffsetNumber validOffsets = MaxOffsetNumber - FirstOffsetNumber + 1;
+	return *((uint32*) &tid.ip_blkid) * validOffsets + tid.ip_posid - FirstOffsetNumber;
 }
 
 
@@ -449,7 +482,9 @@ columnar_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	Datum *values = detoast_values(slot->tts_tupleDescriptor,
 								   slot->tts_values, slot->tts_isnull);
 
-	ColumnarWriteRow(writeState, values, slot->tts_isnull);
+	uint32 stripeWrittenRowCount = ColumnarWriteRow(writeState, values, slot->tts_isnull);
+	uint64 rowNumber = ColumnarTableRowCount(relation) + stripeWrittenRowCount - 1;
+	slot->tts_tid = row_number_to_tid(rowNumber);
 
 	MemoryContextSwitchTo(oldContext);
 	MemoryContextReset(ColumnarWritePerTupleContext(writeState));
@@ -486,6 +521,9 @@ columnar_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	MemoryContext oldContext = MemoryContextSwitchTo(ColumnarWritePerTupleContext(
 														 writeState));
 
+	/* don't calculate row count of existing stripes every time */
+	uint64 columnarTableRowCount = ColumnarTableRowCount(relation);
+
 	for (int i = 0; i < ntuples; i++)
 	{
 		TupleTableSlot *tupleSlot = slots[i];
@@ -495,7 +533,9 @@ columnar_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		Datum *values = detoast_values(tupleSlot->tts_tupleDescriptor,
 									   tupleSlot->tts_values, tupleSlot->tts_isnull);
 
-		ColumnarWriteRow(writeState, values, tupleSlot->tts_isnull);
+		uint32 stripeWrittenRowCount = ColumnarWriteRow(writeState, values, tupleSlot->tts_isnull);
+		tupleSlot->tts_tid = row_number_to_tid(columnarTableRowCount + stripeWrittenRowCount - 1);
+
 		MemoryContextReset(ColumnarWritePerTupleContext(writeState));
 	}
 
@@ -983,8 +1023,141 @@ columnar_index_build_range_scan(Relation heapRelation,
 								void *callback_state,
 								TableScanDesc scan)
 {
-	ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("indexes not supported for columnar tables")));
+	if (start_blockno != 0 || numblocks != InvalidBlockNumber)
+	{
+		/* TODO: implement me */
+		ereport(ERROR, (errmsg("BRIN indexes on columnar tables are not supported")));
+	}
+
+	/*
+	 * Set up execution state for predicate, if any.
+	 * Note that this is only usefull for partial indexes.
+	 */
+	EState *estate = CreateExecutorState();
+	ExprContext *econtext = GetPerTupleExprContext(estate);
+	econtext->ecxt_scantuple = table_slot_create(heapRelation, NULL);
+	ExprState *predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+
+	/* actually build the index by using index-AM's build callback */
+	ColumnarReadState *readState = ColumnarBeginReadForIndexBuild(heapRelation, indexInfo);
+	ColumnarReadRowsIntoIndex(readState, indexRelation, indexInfo, callback,
+							  callback_state, estate, predicate);
+	ColumnarEndRead(readState);
+
+	ExecDropSingleTupleTableSlot(econtext->ecxt_scantuple);
+	FreeExecutorState(estate);
+
+	/* These may have been pointing to the now-gone estate */
+	indexInfo->ii_ExpressionsState = NIL;
+	indexInfo->ii_PredicateState = NULL;
+
+	/*
+	 * All rows in columnar are alive, so return number of columns that table
+	 * has.
+	 * TODO: maybe different for partial indexes ?
+	 */
+	return ColumnarTableRowCount(heapRelation);
+}
+
+
+static ColumnarReadState *
+ColumnarBeginReadForIndexBuild(Relation relation, IndexInfo *indexInfo)
+{
+	TupleDesc relationTupleDesc = RelationGetDescr(relation);
+	List *indexColumnList = BuildIndexColumnList(relation, indexInfo);
+	/*
+	 * TODO: could pass indexInfo->ii_Predicate, but was broken :/
+	 * Probably because we fetch the wrong rowNumber
+	 */
+	List *qualConditions = NIL;
+	return ColumnarBeginRead(relation, relationTupleDesc, indexColumnList, qualConditions);
+}
+
+
+static List *
+BuildIndexColumnList(Relation relation, IndexInfo *indexInfo)
+{
+	List *indexColumnList = NIL;
+
+	TupleDesc relationTupleDesc = RelationGetDescr(relation);
+	List *relationColumnList = RelationColumnList(relationTupleDesc);
+
+	Var *column = NULL;
+	foreach_ptr(column, relationColumnList)
+	{
+		if (attr_is_array_member(column->varattno, indexInfo->ii_IndexAttrNumbers,
+								 indexInfo->ii_NumIndexKeyAttrs))
+		{
+			indexColumnList = lappend(indexColumnList, column);
+		}
+	}
+
+	return indexColumnList;
+}
+
+
+static bool
+attr_is_array_member(AttrNumber inputAttr, AttrNumber *attrArray, int attrArraySize)
+{
+	for (int i = 0; i < attrArraySize; i++)
+	{
+		if (inputAttr == attrArray[i])
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+static void
+ColumnarReadRowsIntoIndex(ColumnarReadState *readState, Relation indexRelation,
+						  IndexInfo *indexInfo, IndexBuildCallback indexCallback,
+						  void *indexCallbackState, EState *estate, ExprState *predicate)
+{
+	ExprContext *econtext = GetPerTupleExprContext(estate);
+	TupleTableSlot *slot = econtext->ecxt_scantuple;
+
+	/* probably no need to do that, but .. */
+	//ExecClearTuple(slot);
+
+	uint64 rowNumber = 0;
+	while (ColumnarReadNextRow(readState, slot->tts_values, slot->tts_isnull, &rowNumber))
+	{
+		// TODO: do this somewhere: MemoryContextReset(econtext->ecxt_per_tuple_memory);
+		ExecStoreVirtualTuple(slot);
+
+		if (predicate != NULL && !ExecQual(predicate, econtext))
+		{
+			/* for partial indexes, discard tuples that don't satisfy the predicate */
+			ExecClearTuple(slot);
+			continue;
+		}
+
+		Datum indexValues[INDEX_MAX_KEYS];
+		bool indexNulls[INDEX_MAX_KEYS];
+		FormIndexDatum(indexInfo,
+					   slot,
+					   estate,
+					   indexValues,
+					   indexNulls);
+
+		ItemPointerData itemPointerData = row_number_to_tid(rowNumber);
+		/* currently, columnar tables can't have dead tuples */
+		bool tupleIsAlive = true;
+#if PG_VERSION_NUM >= PG_VERSION_13
+		indexCallback(indexRelation, &itemPointerData, indexValues, indexNulls,
+				 	  tupleIsAlive, indexCallbackState);
+#else
+		HeapTuple scanTuple = ExecCopySlotHeapTuple(slot);
+		scanTuple->t_self = itemPointerData;
+		indexCallback(indexRelation, scanTuple, indexValues, indexNulls,
+				 	  tupleIsAlive, indexCallbackState);
+#endif
+
+		ExecClearTuple(slot);
+	}
 }
 
 
@@ -1143,6 +1316,7 @@ columnar_tableam_init()
 
 	TTSOpsColumnar = TTSOpsVirtual;
 	TTSOpsColumnar.copy_heap_tuple = ColumnarSlotCopyHeapTuple;
+	TTSOpsColumnar.getsomeattrs = ColumnarSlotGetSomeAttrs;
 }
 
 
@@ -1190,6 +1364,19 @@ ColumnarSlotCopyHeapTuple(TupleTableSlot *slot)
 	tuple->t_self = slot->tts_tid;
 
 	return tuple;
+}
+
+
+/*
+ * Implementation of TupleTableSlotOps.getsomeattrs for TTSOpsColumnar.
+ */
+static void
+ColumnarSlotGetSomeAttrs (TupleTableSlot *slot, int natts)
+{
+	/*
+	 * No-op since values & isNull are already ready to access,
+	 * but some postgres functions might still call this.
+	 */
 }
 
 
@@ -1329,7 +1516,8 @@ ColumnarProcessUtility(PlannedStmt *pstmt,
 			if (rel->rd_tableam == GetColumnarTableAmRoutine())
 			{
 				ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								errmsg("indexes not supported for columnar tables")));
+								errmsg("concurrent index commands are not "
+									   "supported for columnar tables")));
 			}
 
 			RelationClose(rel);

@@ -633,6 +633,52 @@ ReadStripeSkipList(RelFileNode relfilenode, uint64 stripe, TupleDesc tupleDescri
 }
 
 
+StripeMetadata *
+FindStripeByRowNumber(Relation relation, uint64 rowNumber, Snapshot snapshot)
+{
+	StripeMetadata *searchStripeMetadata = NULL;
+
+	/* TODO: to a function */
+	bool missingOk = false;
+	ColumnarMetapage *metadata = ReadMetapage(relation->rd_node, missingOk);
+	uint64 storageId = metadata->storageId;
+
+	ScanKeyData scanKey[2];
+	ScanKeyInit(&scanKey[0], Anum_columnar_stripe_storageid,
+				BTEqualStrategyNumber, F_OIDEQ, Int32GetDatum(storageId));
+	ScanKeyInit(&scanKey[1], Anum_columnar_stripe_first_row_number,
+				BTLessEqualStrategyNumber, F_INT8LE, UInt64GetDatum(rowNumber));
+
+	Relation columnarStripes = table_open(ColumnarStripeRelationId(), AccessShareLock);
+	Relation index = index_open(ColumnarStripeFirstRowNumberIndexRelationId(), AccessShareLock);
+	SysScanDesc scanDescriptor = systable_beginscan_ordered(columnarStripes, index,
+															snapshot, 2,
+															scanKey);
+
+	HeapTuple heapTuple = systable_getnext_ordered(scanDescriptor, BackwardScanDirection);
+	if (HeapTupleIsValid(heapTuple))
+	{
+		TupleDesc tupleDescriptor = RelationGetDescr(columnarStripes);
+		Datum datumArray[Natts_columnar_stripe];
+		bool isNullArray[Natts_columnar_stripe];
+		heap_deform_tuple(heapTuple, tupleDescriptor, datumArray, isNullArray);
+
+		StripeMetadata *stripeMetadata = BuildStripeMetadata(datumArray);
+		/* this check is only usefull for the last stripe */
+		if (rowNumber < stripeMetadata->firstRowNumber + stripeMetadata->rowCount)
+		{
+			searchStripeMetadata = stripeMetadata;
+		}
+	}
+
+	systable_endscan_ordered(scanDescriptor);
+	index_close(index, AccessShareLock);
+	table_close(columnarStripes, AccessShareLock);
+
+	return searchStripeMetadata;
+}
+
+
 /*
  * ReadChunkGroupRowCounts returns an array of row counts of chunk groups for the
  * given stripe.

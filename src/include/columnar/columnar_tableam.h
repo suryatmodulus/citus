@@ -13,6 +13,7 @@ const TableAmRoutine * GetColumnarTableAmRoutine(void);
 extern void columnar_tableam_init(void);
 extern void columnar_tableam_finish(void);
 
+extern List * RelationColumnList(TupleDesc tupdesc);
 extern TableScanDesc columnar_beginscan_extended(Relation relation, Snapshot snapshot,
 												 int nkeys, ScanKey key,
 												 ParallelTableScanDesc parallel_scan,

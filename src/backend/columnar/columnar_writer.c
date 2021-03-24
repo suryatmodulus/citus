@@ -147,7 +147,7 @@ ColumnarBeginWrite(RelFileNode relfilenode,
  * rowChunkCount insertion. Then, if row count exceeds stripeMaxRowCount, we flush
  * the stripe, and add its metadata to the table footer.
  */
-void
+uint32
 ColumnarWriteRow(ColumnarWriteState *writeState, Datum *columnValues, bool *columnNulls)
 {
 	uint32 columnIndex = 0;
@@ -225,13 +225,16 @@ ColumnarWriteRow(ColumnarWriteState *writeState, Datum *columnValues, bool *colu
 		SerializeChunkData(writeState, chunkIndex, chunkRowCount);
 	}
 
-	stripeBuffers->rowCount++;
+	/* store the written row count, since we might call ColumnarFlushPendingWrites */
+	uint32 writtenRowCount = ++stripeBuffers->rowCount;
 	if (stripeBuffers->rowCount >= options->stripeRowCount)
 	{
 		ColumnarFlushPendingWrites(writeState);
 	}
 
 	MemoryContextSwitchTo(oldContext);
+
+	return writtenRowCount;
 }
 
 
