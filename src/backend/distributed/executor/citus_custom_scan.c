@@ -321,6 +321,11 @@ CitusBeginModifyScan(CustomScanState *node, EState *estate, int eflags)
 	PlanState *planState = &(scanState->customScanState.ss.ps);
 	DistributedPlan *originalDistributedPlan = scanState->distributedPlan;
 
+	MemoryContext localContext = AllocSetContextCreate(CurrentMemoryContext,
+													   "CitusBeginModifyScan",
+													   ALLOCSET_DEFAULT_SIZES);
+	MemoryContext oldContext = MemoryContextSwitchTo(localContext);
+
 	DistributedPlan *currentPlan =
 		CopyDistributedPlanWithoutCache(originalDistributedPlan);
 	scanState->distributedPlan = currentPlan;
@@ -411,6 +416,8 @@ CitusBeginModifyScan(CustomScanState *node, EState *estate, int eflags)
 		 */
 		CacheLocalPlanForShardQuery(task, originalDistributedPlan);
 	}
+
+	MemoryContextSwitchTo(oldContext);
 }
 
 

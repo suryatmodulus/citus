@@ -233,6 +233,11 @@ ExecuteLocalTaskListExtended(List *taskList,
 		numParams = paramListInfo->numParams;
 	}
 
+	MemoryContext loopContext = AllocSetContextCreate(CurrentMemoryContext,
+													  "ExecuteLocalTaskListExtended",
+													  ALLOCSET_DEFAULT_SIZES);
+	MemoryContext oldContext = MemoryContextSwitchTo(loopContext);
+
 	Task *task = NULL;
 	foreach_ptr(task, taskList)
 	{
@@ -312,6 +317,8 @@ ExecuteLocalTaskListExtended(List *taskList,
 				totalRowsProcessed +=
 					LocallyPlanAndExecuteMultipleQueries(queryStringList, tupleDest,
 														 task);
+
+				MemoryContextReset(loopContext);
 				continue;
 			}
 
@@ -347,7 +354,11 @@ ExecuteLocalTaskListExtended(List *taskList,
 		totalRowsProcessed +=
 			ExecuteLocalTaskPlan(localPlan, shardQueryString,
 								 tupleDest, task, paramListInfo);
+
+		MemoryContextReset(loopContext);
 	}
+
+	oldContext = MemoryContextSwitchTo(oldContext);
 
 	return totalRowsProcessed;
 }
@@ -586,6 +597,12 @@ ExecuteLocalTaskPlan(PlannedStmt *taskPlan, char *queryString,
 
 	RecordNonDistTableAccessesForTask(task);
 
+	MemoryContext localContext = AllocSetContextCreate(CurrentMemoryContext,
+													   "ExecuteLocalTaskPlan",
+													   ALLOCSET_DEFAULT_SIZES);
+
+	MemoryContext oldContext = MemoryContextSwitchTo(localContext);
+
 	/*
 	 * Some tuple destinations look at task->taskPlacementList to determine
 	 * where the result came from using the placement index. Since a local
@@ -628,6 +645,9 @@ ExecuteLocalTaskPlan(PlannedStmt *taskPlan, char *queryString,
 	ExecutorEnd(queryDesc);
 
 	FreeQueryDesc(queryDesc);
+
+	MemoryContextDelete(localContext);
+	MemoryContextSwitchTo(oldContext);
 
 	return totalRowsProcessed;
 }
