@@ -88,6 +88,7 @@ static uint32 * ReadChunkGroupRowCounts(uint64 storageId, uint64 stripe, uint32
 static Oid ColumnarStorageIdSequenceRelationId(void);
 static Oid ColumnarStripeRelationId(void);
 static Oid ColumnarStripePKeyIndexRelationId(void);
+static Oid ColumnarStripeFirstRowNumberIndexRelationId(void);
 static Oid ColumnarOptionsRelationId(void);
 static Oid ColumnarOptionsIndexRegclass(void);
 static Oid ColumnarChunkRelationId(void);
@@ -140,7 +141,7 @@ typedef FormData_columnar_options *Form_columnar_options;
 
 
 /* constants for columnar.stripe */
-#define Natts_columnar_stripe 8
+#define Natts_columnar_stripe 9
 #define Anum_columnar_stripe_storageid 1
 #define Anum_columnar_stripe_stripe 2
 #define Anum_columnar_stripe_file_offset 3
@@ -149,6 +150,7 @@ typedef FormData_columnar_options *Form_columnar_options;
 #define Anum_columnar_stripe_chunk_row_count 6
 #define Anum_columnar_stripe_row_count 7
 #define Anum_columnar_stripe_chunk_count 8
+#define Anum_columnar_stripe_first_row_number 9
 
 /* constants for columnar.chunk_group */
 #define Natts_columnar_chunkgroup 4
@@ -704,7 +706,8 @@ InsertStripeMetadataRow(uint64 storageId, StripeMetadata *stripe)
 		Int32GetDatum(stripe->columnCount),
 		Int32GetDatum(stripe->chunkGroupRowCount),
 		Int64GetDatum(stripe->rowCount),
-		Int32GetDatum(stripe->chunkCount)
+		Int32GetDatum(stripe->chunkCount),
+		UInt64GetDatum(stripe->firstRowNumber)
 	};
 
 	Oid columnarStripesOid = ColumnarStripeRelationId();
@@ -888,6 +891,8 @@ ReserveStripe(Relation rel, uint64 sizeBytes,
 	stripe.columnCount = columnCount;
 	stripe.rowCount = rowCount;
 	stripe.id = highestId + 1;
+	/* TODO: need to use a proper snapshot here */
+	stripe.firstRowNumber = ColumnarTableRowCount(rel);
 
 	InsertStripeMetadataRow(metapage->storageId, &stripe);
 
@@ -942,6 +947,8 @@ ReadDataFileStripeList(uint64 storageId, Snapshot snapshot)
 			datumArray[Anum_columnar_stripe_chunk_row_count - 1]);
 		stripeMetadata->rowCount = DatumGetInt64(
 			datumArray[Anum_columnar_stripe_row_count - 1]);
+		stripeMetadata->firstRowNumber = DatumGetUInt64(
+			datumArray[Anum_columnar_stripe_first_row_number - 1]);
 
 		stripeMetadataList = lappend(stripeMetadataList, stripeMetadata);
 	}
@@ -1235,6 +1242,17 @@ ColumnarStripePKeyIndexRelationId(void)
 	return get_relname_relid("stripe_pkey", ColumnarNamespaceId());
 }
 
+
+/*
+ * ColumnarStripeFirstRowNumberIndexRelationId returns relation id of
+ * columnar.stripe_first_row_number_idx.
+ * TODO: should we cache this similar to citus?
+ */
+static Oid
+ColumnarStripeFirstRowNumberIndexRelationId(void)
+{
+	return get_relname_relid("stripe_first_row_number_idx", ColumnarNamespaceId());
+}
 
 /*
  * ColumnarOptionsRelationId returns relation id of columnar.options.

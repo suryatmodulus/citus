@@ -178,7 +178,7 @@ ColumnarBeginRead(Relation relation, TupleDesc tupleDescriptor,
  * the function returns false.
  */
 bool
-ColumnarReadNextRow(ColumnarReadState *readState, Datum *columnValues, bool *columnNulls)
+ColumnarReadNextRow(ColumnarReadState *readState, Datum *columnValues, bool *columnNulls, uint64 *rowNumber)
 {
 	while (true)
 	{
@@ -212,6 +212,13 @@ ColumnarReadNextRow(ColumnarReadState *readState, Datum *columnValues, bool *col
 			MemoryContextReset(readState->stripeReadContext);
 
 			continue;
+		}
+
+		if (rowNumber)
+		{
+			/* TODO: maybe optimize list_nth */
+			StripeMetadata *stripeMetadata = list_nth(readState->stripeList, readState->currentStripe);
+			*rowNumber = stripeMetadata->firstRowNumber + readState->stripeReadState->currentRow - 1;
 		}
 
 		return true;

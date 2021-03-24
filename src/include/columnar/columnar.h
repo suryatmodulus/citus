@@ -214,7 +214,7 @@ extern ColumnarReadState * ColumnarBeginRead(Relation relation,
 											 List *projectedColumnList,
 											 List *qualConditions);
 extern bool ColumnarReadNextRow(ColumnarReadState *state, Datum *columnValues,
-								bool *columnNulls);
+								bool *columnNulls, uint64 *rowNumber);
 extern void ColumnarRescan(ColumnarReadState *readState);
 extern void ColumnarEndRead(ColumnarReadState *state);
 extern int64 ColumnarReadChunkGroupsFiltered(ColumnarReadState *state);
