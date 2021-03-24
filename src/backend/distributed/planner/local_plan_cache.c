@@ -143,6 +143,14 @@ GetCachedLocalPlan(Task *task, DistributedPlan *distributedPlan)
 bool
 IsLocalPlanCachingSupported(Job *currentJob, DistributedPlan *originalDistributedPlan)
 {
+	if (originalDistributedPlan->usageCount < 1)
+	{
+		/*
+		 * Only cache if a plan is being reused (via a prepared statement).
+		 */
+		return false;
+	}
+
 	if (!currentJob->deferredPruning)
 	{
 		/*
