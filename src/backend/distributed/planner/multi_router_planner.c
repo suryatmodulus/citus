@@ -1655,11 +1655,23 @@ RouterInsertTaskList(Query *query, bool parametersInQueryResolved,
 
 	Assert(query->commandType == CMD_INSERT);
 
+	/*
+	 * Multi-row inserts may be large and BuildRoutesForInsert allocates some
+	 * per-tuple memory that is not used beyond this function. Prepare a memory
+	 * context.
+	 */
+	MemoryContext routesContext = AllocSetContextCreate(CurrentMemoryContext,
+														"BuildRoutesForInsert",
+														ALLOCSET_DEFAULT_SIZES);
+	MemoryContext oldContext = MemoryContextSwitchTo(routesContext);
+
 	List *modifyRouteList = BuildRoutesForInsert(query, planningError);
 	if (*planningError != NULL)
 	{
 		return NIL;
 	}
+
+	MemoryContextSwitchTo(oldContext);
 
 	ModifyRoute *modifyRoute = NULL;
 	foreach_ptr(modifyRoute, modifyRouteList)
@@ -1667,7 +1679,7 @@ RouterInsertTaskList(Query *query, bool parametersInQueryResolved,
 		Task *modifyTask = CreateTask(MODIFY_TASK);
 		modifyTask->anchorShardId = modifyRoute->shardId;
 		modifyTask->replicationModel = cacheEntry->replicationModel;
-		modifyTask->rowValuesLists = modifyRoute->rowValuesLists;
+		modifyTask->rowValuesLists = list_copy(modifyRoute->rowValuesLists);
 
 		RelationShard *relationShard = CitusMakeNode(RelationShard);
 		relationShard->shardId = modifyRoute->shardId;
@@ -1679,6 +1691,8 @@ RouterInsertTaskList(Query *query, bool parametersInQueryResolved,
 
 		insertTaskList = lappend(insertTaskList, modifyTask);
 	}
+
+	MemoryContextDelete(routesContext);
 
 	return insertTaskList;
 }
