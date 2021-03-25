@@ -83,6 +83,7 @@ static void GetHighestUsedAddressAndId(uint64 storageId,
 static void LockForStripeReservation(Relation rel, LOCKMODE mode);
 static void UnlockForStripeReservation(Relation rel, LOCKMODE mode);
 static List * ReadDataFileStripeList(uint64 storageId, Snapshot snapshot);
+static StripeMetadata * BuildStripeMetadata(Datum *datumArray);
 static uint32 * ReadChunkGroupRowCounts(uint64 storageId, uint64 stripe, uint32
 										chunkGroupCount);
 static Oid ColumnarStorageIdSequenceRelationId(void);
@@ -932,24 +933,7 @@ ReadDataFileStripeList(uint64 storageId, Snapshot snapshot)
 		bool isNullArray[Natts_columnar_stripe];
 
 		heap_deform_tuple(heapTuple, tupleDescriptor, datumArray, isNullArray);
-
-		StripeMetadata *stripeMetadata = palloc0(sizeof(StripeMetadata));
-		stripeMetadata->id = DatumGetInt64(datumArray[Anum_columnar_stripe_stripe - 1]);
-		stripeMetadata->fileOffset = DatumGetInt64(
-			datumArray[Anum_columnar_stripe_file_offset - 1]);
-		stripeMetadata->dataLength = DatumGetInt64(
-			datumArray[Anum_columnar_stripe_data_length - 1]);
-		stripeMetadata->columnCount = DatumGetInt32(
-			datumArray[Anum_columnar_stripe_column_count - 1]);
-		stripeMetadata->chunkCount = DatumGetInt32(
-			datumArray[Anum_columnar_stripe_chunk_count - 1]);
-		stripeMetadata->chunkGroupRowCount = DatumGetInt32(
-			datumArray[Anum_columnar_stripe_chunk_row_count - 1]);
-		stripeMetadata->rowCount = DatumGetInt64(
-			datumArray[Anum_columnar_stripe_row_count - 1]);
-		stripeMetadata->firstRowNumber = DatumGetUInt64(
-			datumArray[Anum_columnar_stripe_first_row_number - 1]);
-
+		StripeMetadata *stripeMetadata = BuildStripeMetadata(datumArray);
 		stripeMetadataList = lappend(stripeMetadataList, stripeMetadata);
 	}
 
@@ -958,6 +942,29 @@ ReadDataFileStripeList(uint64 storageId, Snapshot snapshot)
 	table_close(columnarStripes, AccessShareLock);
 
 	return stripeMetadataList;
+}
+
+
+static StripeMetadata *
+BuildStripeMetadata(Datum *datumArray)
+{
+	StripeMetadata *stripeMetadata = palloc0(sizeof(StripeMetadata));
+	stripeMetadata->id = DatumGetInt64(datumArray[Anum_columnar_stripe_stripe - 1]);
+	stripeMetadata->fileOffset = DatumGetInt64(
+		datumArray[Anum_columnar_stripe_file_offset - 1]);
+	stripeMetadata->dataLength = DatumGetInt64(
+		datumArray[Anum_columnar_stripe_data_length - 1]);
+	stripeMetadata->columnCount = DatumGetInt32(
+		datumArray[Anum_columnar_stripe_column_count - 1]);
+	stripeMetadata->chunkCount = DatumGetInt32(
+		datumArray[Anum_columnar_stripe_chunk_count - 1]);
+	stripeMetadata->chunkGroupRowCount = DatumGetInt32(
+		datumArray[Anum_columnar_stripe_chunk_row_count - 1]);
+	stripeMetadata->rowCount = DatumGetInt64(
+		datumArray[Anum_columnar_stripe_row_count - 1]);
+	stripeMetadata->firstRowNumber = DatumGetUInt64(
+		datumArray[Anum_columnar_stripe_first_row_number - 1]);
+	return stripeMetadata;
 }
 
 
