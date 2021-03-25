@@ -2641,7 +2641,7 @@ CalculateNewConnectionCount(WorkerPool *workerPool)
 					(readyTaskCount * avgTaskExecutionTime) / (initiatedConnectionCount == 0 ? 1 : initiatedConnectionCount);
 
 			elog(INFO, "%f = %f - %f", avgConnTime, avgTaskExecutionTime, expectedRemainingTaskExecutionTime);
-			if (expectedRemainingTaskExecutionTime < avgConnTime)
+			if (expectedRemainingTaskExecutionTime < 5 * avgConnTime)
 			{
 
 				elog(INFO, "yay");
