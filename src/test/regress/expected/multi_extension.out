@@ -564,7 +564,8 @@ SELECT * FROM print_extension_changes();
 ---------------------------------------------------------------------
  function create_distributed_table(regclass,text,citus.distribution_type,text) |
                                                                                | function create_distributed_table(regclass,text,citus.distribution_type,text,integer)
-(2 rows)
+                                                                               | function citus_partitioned_shard_total_size(text)
+(3 rows)
 
 DROP TABLE prev_objects, extension_diff;
 -- show running version
