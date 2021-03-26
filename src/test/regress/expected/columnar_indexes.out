@@ -10,7 +10,7 @@ SET search_path tO columnar_indexes, public;
 --
 create table t(a int, b int) using columnar;
 create index CONCURRENTLY t_idx on t(a, b);
-ERROR:  indexes not supported for columnar tables
+ERROR:  concurrent index commands are not supported for columnar tables
 \d t
             Table "columnar_indexes.t"
  Column |  Type   | Collation | Nullable | Default
@@ -35,13 +35,14 @@ SELECT * FROM t;
 -- create index without the concurrent option. We should
 -- error out during index creation.
 create index t_idx on t(a, b);
-ERROR:  indexes not supported for columnar tables
 \d t
             Table "columnar_indexes.t"
  Column |  Type   | Collation | Nullable | Default
 ---------------------------------------------------------------------
  a      | integer |           |          |
  b      | integer |           |          |
+Indexes:
+    "t_idx" btree (a, b)
 
 explain insert into t values (1, 2);
                    QUERY PLAN
@@ -58,5 +59,70 @@ SELECT * FROM t;
  3 | 4
 (2 rows)
 
+set columnar.enable_custom_scan to 'off';
+create table columnar_table (a int, b int) using columnar;
+insert into columnar_table (a, b) select i,i*2 from generate_series(0, 16000) i;
+-- unique
+create unique index ON columnar_table (a);
+explain (costs off) select * from columnar_table where a=6456;
+                       QUERY PLAN
+---------------------------------------------------------------------
+ Index Scan using columnar_table_a_idx on columnar_table
+   Index Cond: (a = 6456)
+(2 rows)
+
+explain (costs off) select a from columnar_table where a=6456;
+                          QUERY PLAN
+---------------------------------------------------------------------
+ Index Only Scan using columnar_table_a_idx on columnar_table
+   Index Cond: (a = 6456)
+(2 rows)
+
+SELECT (select a from columnar_table where a=6456 limit 1)=6456;
+ ?column?
+---------------------------------------------------------------------
+ t
+(1 row)
+
+SELECT (select b from columnar_table where a=6456 limit 1)=6456*2;
+ ?column?
+---------------------------------------------------------------------
+ t
+(1 row)
+
+-- should work
+insert into columnar_table values (16050);
+-- error out
+insert into columnar_table values (16050);
+ERROR:  duplicate key value violates unique constraint "columnar_table_a_idx"
+DETAIL:  Key (a)=(16050) already exists.
+-- error out
+insert into columnar_table values (15999);
+ERROR:  duplicate key value violates unique constraint "columnar_table_a_idx"
+DETAIL:  Key (a)=(15999) already exists.
+drop index columnar_table_a_idx ;
+-- btree
+create index ON columnar_table (a);
+SELECT (select sum(b) from columnar_table where a>700 and a<965)=439560;
+ ?column?
+---------------------------------------------------------------------
+ t
+(1 row)
+
+-- some more rows
+insert into columnar_table (a, b) select i,i*2 from generate_series(16000, 17000) i;
+drop index columnar_table_a_idx;
+truncate columnar_table;
+-- pkey
+insert into columnar_table (a, b) select i,i*2 from generate_series(16000, 16499) i;
+alter table columnar_table add primary key (a);
+insert into columnar_table (a, b) select i,i*2 from generate_series(16500, 17000) i;
+-- error out
+insert into columnar_table values (16100), (16101);
+ERROR:  duplicate key value violates unique constraint "columnar_table_pkey"
+DETAIL:  Key (a)=(16100) already exists.
+insert into columnar_table values (16999);
+ERROR:  duplicate key value violates unique constraint "columnar_table_pkey"
+DETAIL:  Key (a)=(16999) already exists.
 SET client_min_messages TO WARNING;
 DROP SCHEMA columnar_indexes CASCADE;
