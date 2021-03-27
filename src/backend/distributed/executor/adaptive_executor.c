@@ -638,7 +638,7 @@ static WorkerSession * FindOrCreateWorkerSession(WorkerPool *workerPool,
 static void ManageWorkerPool(WorkerPool *workerPool);
 static bool ShouldWaitForSlowStart(WorkerPool *workerPool);
 static int CalculateNewConnectionCount(WorkerPool *workerPool);
-static double AvgConnectionEstTimes(WorkerPool *workerPool);
+static double AvgConnectionEstablishmentTime(WorkerPool *workerPool);
 static double AvgTaskExecutionTimes(WorkerPool *workerPool);
 static void OpenNewConnections(WorkerPool *workerPool, int newConnectionCount,
 							   TransactionProperties *transactionProperties);
@@ -1643,7 +1643,7 @@ CleanUpSessions(DistributedExecution *execution)
 
 		UnclaimConnection(connection);
 		if (connection->connectionState == MULTI_CONNECTION_CONNECTING)
-			elog(INFO, "connectting: %ld", session->sessionId);
+			elog(INFO, "connecting at the end: %ld", session->sessionId);
 
 		if (connection->connectionState == MULTI_CONNECTION_CONNECTING ||
 			connection->connectionState == MULTI_CONNECTION_FAILED ||
@@ -2446,6 +2446,9 @@ ManageWorkerPool(WorkerPool *workerPool)
 		return;
 	}
 
+	/* increase the open rate every cycle (like TCP slow start) */
+	workerPool->maxNewConnectionsPerCycle += 1;
+
 	OpenNewConnections(workerPool, newConnectionCount, execution->transactionProperties);
 
 	/*
@@ -2632,26 +2635,29 @@ CalculateNewConnectionCount(WorkerPool *workerPool)
 		 * than the target pool size.
 		 */
 		newConnectionCount = Min(newConnectionsForReadyTasks, maxNewConnectionCount);
-		if (newConnectionCount > 0)
+		if (EnableDeadlockPrevention && newConnectionCount > 0 && workerPool->totalExecutedTasks > 0)
 		{
-			double avgConnTime = AvgConnectionEstTimes(workerPool);
 			double avgTaskExecutionTime = AvgTaskExecutionTimes(workerPool);
+			double avgConnectionEstablishmentTime = AvgConnectionEstablishmentTime(workerPool);
 
-			double expectedRemainingTaskExecutionTime =
-					(readyTaskCount * avgTaskExecutionTime) / (initiatedConnectionCount == 0 ? 1 : initiatedConnectionCount);
+			double costOfExecutingTheTasksOverExistingConnections =
+					avgTaskExecutionTime * newConnectionsForReadyTasks / activeConnectionCount;
+			double costOfExecutingTheTasksOverNewConnection = (avgTaskExecutionTime + avgConnectionEstablishmentTime);
 
-			elog(INFO, "%f = %f - %f", avgConnTime, avgTaskExecutionTime, expectedRemainingTaskExecutionTime);
-			if (expectedRemainingTaskExecutionTime < 5 * avgConnTime)
+			elog(DEBUG5, "returnn early costOfExecutingTheTasksOverNewConnection: %f costOfExecutingTheTasksOverNewConnection: %f avgTaskExecutionTime: %f  avgConnectionEstablishmentTime: %f", costOfExecutingTheTasksOverExistingConnections, costOfExecutingTheTasksOverNewConnection, 	avgTaskExecutionTime, avgConnectionEstablishmentTime);
+
+
+			if (costOfExecutingTheTasksOverExistingConnections < costOfExecutingTheTasksOverNewConnection)
 			{
+				elog(DEBUG5, "return early");
 
-				elog(INFO, "yay");
 				return 0;
 			}
+			else return newConnectionCount;
 
-			/* increase the open rate every cycle (like TCP slow start) */
-			workerPool->maxNewConnectionsPerCycle += 1;
 		}
 	}
+
 	return newConnectionCount;
 }
 
@@ -2668,7 +2674,7 @@ AvgTaskExecutionTimes(WorkerPool *workerPool)
 
 
 static
-double AvgConnectionEstTimes(WorkerPool *workerPool)
+double AvgConnectionEstablishmentTime(WorkerPool *workerPool)
 {
 	double totalTimeUsec = 0;
 	int sessionCount = 0;
@@ -2696,7 +2702,7 @@ double AvgConnectionEstTimes(WorkerPool *workerPool)
 	if (sessionCount > 0)
 		return totalTimeUsec / sessionCount;
 
-	return 0;
+	return 5000;
 }
 
 /*
@@ -3300,7 +3306,7 @@ HandleMultiConnectionSuccess(WorkerSession *session)
 	{
 		connection->connectionEnd = GetCurrentTimestamp();
 
-		if (IsLoggableLevel(DEBUG4))
+		if (IsLoggableLevel(WARNING))
 		{
 			/* this code-block is inspired from log_disconnections() */
 			long	 secs = 0;
@@ -3311,7 +3317,7 @@ HandleMultiConnectionSuccess(WorkerSession *session)
 								&secs, &usecs);
 			int msecs = usecs / 1000;
 
-			ereport(DEBUG4,
+			ereport(WARNING,
 					(errmsg("Connection establishment time for session %ld: "
 							"%03d msecs", session->sessionId, msecs)));
 		}
@@ -4456,8 +4462,8 @@ PlacementExecutionDone(TaskPlacementExecution *placementExecution, bool succeede
 								&secs, &usecs);
 			int msecs = usecs / 1000;
 
-			if(IsLoggableLevel(DEBUG4))
-			ereport(DEBUG4,
+			if(IsLoggableLevel(DEBUG1))
+			ereport(DEBUG1,
 					(errmsg("Task execution time for task %d: "
 							"%03d msecs", placementExecution->shardCommandExecution->task->taskId, msecs)));
 
