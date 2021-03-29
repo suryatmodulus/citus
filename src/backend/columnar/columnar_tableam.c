@@ -362,6 +362,15 @@ columnar_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
 static IndexFetchTableData *
 columnar_index_fetch_begin(Relation rel)
 {
+	Oid relfilenode = rel->rd_node.relNode;
+	if (PendingWritesInUpperTransactions(relfilenode, GetCurrentSubTransactionId()))
+	{
+		elog(ERROR,
+			 "cannot read from index when there is unflushed data in upper transactions");
+	}
+
+	FlushWriteStateForRelfilenode(relfilenode, GetCurrentSubTransactionId());
+
 	IndexFetchTableData *scan = palloc0(sizeof(IndexFetchTableData));
 	scan->rel = rel;
 	return scan;
