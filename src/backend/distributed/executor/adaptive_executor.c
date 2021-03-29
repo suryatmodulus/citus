@@ -1627,6 +1627,38 @@ FinishDistributedExecution(DistributedExecution *execution)
 static void
 CleanUpSessions(DistributedExecution *execution)
 {
+
+	WorkerPool *workerPool = NULL;
+	foreach_ptr(workerPool, execution->workerList)
+	{
+		if (IsLoggableLevel(WARNING))
+			ereport(WARNING,
+						(errmsg("Connections to node %s:%d", workerPool->nodeName, workerPool->nodePort)));
+
+		WorkerSession *session = NULL;
+		foreach_ptr(session, workerPool->sessionList)
+		{
+			if (IsLoggableLevel(WARNING))
+			{
+				/* this code-block is inspired from log_disconnections() */
+				long	 secs = 0;
+				int usecs = 0;
+
+				TimestampDifference(session->connection->connectionStart,
+						session->connection->connectionEnd,
+									&secs, &usecs);
+				int msecs = usecs / 1000;
+
+				ereport(WARNING,
+						(errmsg("Connection establishment time for session %ld: "
+								"%03d msecs", session->sessionId, msecs)));
+			}
+		}
+	}
+
+
+
+
 	List *sessionList = execution->sessionList;
 
 	/* we get to this function only after successful executions */
@@ -3305,22 +3337,6 @@ HandleMultiConnectionSuccess(WorkerSession *session)
 	if (connection->connectionEnd == 0)
 	{
 		connection->connectionEnd = GetCurrentTimestamp();
-
-		if (IsLoggableLevel(WARNING))
-		{
-			/* this code-block is inspired from log_disconnections() */
-			long	 secs = 0;
-			int usecs = 0;
-
-			TimestampDifference(connection->connectionStart,
-								connection->connectionEnd,
-								&secs, &usecs);
-			int msecs = usecs / 1000;
-
-			ereport(WARNING,
-					(errmsg("Connection establishment time for session %ld: "
-							"%03d msecs", session->sessionId, msecs)));
-		}
 	}
 }
 
