@@ -218,7 +218,6 @@ extern bool ColumnarReadNextRow(ColumnarReadState *state, Datum *columnValues,
 extern void ColumnarRescan(ColumnarReadState *readState);
 extern void ColumnarEndRead(ColumnarReadState *state);
 extern int64 ColumnarReadChunkGroupsFiltered(ColumnarReadState *state);
-extern const List * ColumnarReadProjectedColumnList(ColumnarReadState *state);
 
 /* Function declarations for common functions */
 extern FmgrInfo * GetFunctionInfoOrNull(Oid typeId, Oid accessMethodId,

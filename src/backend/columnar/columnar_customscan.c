@@ -23,8 +23,8 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/restrictinfo.h"
+#include "utils/lsyscache.h"
 #include "utils/relcache.h"
-#include "utils/syscache.h"
 
 #include "columnar/columnar_customscan.h"
 #include "columnar/columnar_metadata.h"
@@ -74,9 +74,7 @@ static void ColumnarScan_EndCustomScan(CustomScanState *node);
 static void ColumnarScan_ReScanCustomScan(CustomScanState *node);
 static void ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 										   ExplainState *es);
-static char * GenerateProjectedColumnStr(Relation relation,
-										 const List *projectedColumnList);
-static char * GetRelAttrName(Oid relationId, AttrNumber attrNumber);
+static char * GenerateProjectedColumnStr(ScanState scanState);
 
 /* saved hook value in case of unload */
 static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
@@ -491,70 +489,50 @@ static void
 ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 							   ExplainState *es)
 {
-	TableScanDesc scanDesc = node->ss.ss_currentScanDesc;
+	ColumnarScanDesc scanDesc = (ColumnarScanDesc) node->ss.ss_currentScanDesc;
 
 	if (scanDesc != NULL)
 	{
 		int64 chunkGroupsFiltered = ColumnarScanChunkGroupsFiltered(scanDesc);
 		ExplainPropertyInteger("Columnar Chunk Groups Removed by Filter", NULL,
 							   chunkGroupsFiltered, es);
+	}
 
-		const List *projectedColumnList = ColumnarScanProjectedColumnList(scanDesc);
-		if (list_length(projectedColumnList) > 0)
-		{
-			char *projectedColumnsStr = GenerateProjectedColumnStr(scanDesc->rs_rd,
-																   projectedColumnList);
-			ExplainPropertyText("Columnar Projected Columns",
-								projectedColumnsStr, es);
-		}
+	char *projectedColumnsStr = GenerateProjectedColumnStr(node->ss);
+	if (projectedColumnsStr)
+	{
+		ExplainPropertyText("Columnar Projected Columns", projectedColumnsStr, es);
 	}
 }
 
 
 /*
  * GenerateProjectedColumnStr generates projected column string for explain output.
+ * Returns NULL if no columns are projected.
  */
 static char *
-GenerateProjectedColumnStr(Relation relation, const List *projectedColumnList)
+GenerateProjectedColumnStr(ScanState scanState)
 {
+	Bitmapset *attrNeeded = ColumnarAttrNeeded(&scanState);
+	if (bms_is_empty(attrNeeded))
+	{
+		return NULL;
+	}
+
 	List *columnNameList = NIL;
 
-	Var *column = NULL;
-	foreach_ptr(column, projectedColumnList)
+	int bmsMember = -1;
+	while ((bmsMember = bms_next_member(attrNeeded, bmsMember)) >= 0)
 	{
-		char *columnName = GetRelAttrName(RelationGetRelid(relation), column->varattno);
+		/* ColumnarAttrNeeded decrements attrNumber's by one before storing them in set */
+		AttrNumber attrNumber = bmsMember + 1;
+		Oid relationId = RelationGetRelid(scanState.ss_currentRelation);
+		bool missingOk = false;
+		char *columnName = get_attname(relationId, attrNumber, missingOk);
 		columnNameList = lappend(columnNameList, columnName);
 	}
 
 	return StringJoin(columnNameList, ',');
-}
-
-
-/*
- * GetRelAttrName returns name of the attribute with given attrNumber.
- * If no such attribute exists or if it's dropped, then errors out.
- */
-static char *
-GetRelAttrName(Oid relationId, AttrNumber attrNumber)
-{
-	HeapTuple attributeTuple = SearchSysCache2(ATTNUM, ObjectIdGetDatum(relationId),
-											   Int16GetDatum(attrNumber));
-	if (!HeapTupleIsValid(attributeTuple))
-	{
-		ereport(ERROR, (errmsg("attribute does not exist")));
-	}
-
-	Form_pg_attribute attributeForm = ((Form_pg_attribute) GETSTRUCT(attributeTuple));
-	if (attributeForm->attisdropped)
-	{
-		ereport(ERROR, (errmsg("attribute is dropped")));
-	}
-
-	char *columnName = pstrdup(NameStr(attributeForm->attname));
-
-	ReleaseSysCache(attributeTuple);
-
-	return columnName;
 }
 
 

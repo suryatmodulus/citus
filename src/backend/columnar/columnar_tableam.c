@@ -1177,27 +1177,6 @@ ColumnarScanChunkGroupsFiltered(ColumnarScanDesc columnarScanDesc)
 
 
 /*
- * ColumnarReadProjectedColumnList returns a list of Var objects for the
- * columns that are projected during the given scan.
- */
-const List *
-ColumnarScanProjectedColumnList(TableScanDesc scanDesc)
-{
-	ColumnarScanDesc columnarScanDesc = (ColumnarScanDesc) scanDesc;
-	ColumnarReadState *readState = columnarScanDesc->cs_readState;
-
-	if (readState != NULL)
-	{
-		return ColumnarReadProjectedColumnList(readState);
-	}
-	else
-	{
-		return NIL;
-	}
-}
-
-
-/*
  * Implementation of TupleTableSlotOps.copy_heap_tuple for TTSOpsColumnar.
  */
 static HeapTuple

@@ -440,17 +440,6 @@ ColumnarReadChunkGroupsFiltered(ColumnarReadState *state)
 
 
 /*
- * ColumnarReadProjectedColumnList returns a list of Var objects for the
- * columns that are projected during this read operation.
- */
-const List *
-ColumnarReadProjectedColumnList(ColumnarReadState *state)
-{
-	return state->projectedColumnList;
-}
-
-
-/*
  * CreateEmptyChunkDataArray creates data buffers to keep deserialized exist and
  * value arrays for requested columns in columnMask.
  */
