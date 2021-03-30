@@ -84,10 +84,13 @@ EXPLAIN (costs off) SELECT count(*), sum(i), min(i), max(i) FROM parent;
          ->  Partial Aggregate
                ->  Parallel Append
                      ->  Custom Scan (ColumnarScan) on p3 parent_4
+                           Columnar Projected Columns: i
                      ->  Custom Scan (ColumnarScan) on p0 parent_1
+                           Columnar Projected Columns: i
                      ->  Custom Scan (ColumnarScan) on p1 parent_2
+                           Columnar Projected Columns: i
                      ->  Parallel Seq Scan on p2 parent_3
-(9 rows)
+(12 rows)
 
 SELECT count(*), sum(i), min(i), max(i) FROM parent;
  count  |   sum   | min | max
@@ -146,7 +149,8 @@ EXPLAIN (costs off) SELECT * FROM i_row;
    ->  Seq Scan on i_row i_row_1
    ->  Seq Scan on ij_row_row i_row_2
    ->  Custom Scan (ColumnarScan) on ij_row_col i_row_3
-(4 rows)
+         Columnar Projected Columns: i
+(5 rows)
 
 SELECT * FROM i_row;
   i
@@ -173,9 +177,11 @@ EXPLAIN (costs off) SELECT * FROM i_col;
 ---------------------------------------------------------------------
  Append
    ->  Custom Scan (ColumnarScan) on i_col i_col_1
+         Columnar Projected Columns: i
    ->  Seq Scan on ij_col_row i_col_2
    ->  Custom Scan (ColumnarScan) on ij_col_col i_col_3
-(4 rows)
+         Columnar Projected Columns: i
+(6 rows)
 
 SELECT * FROM i_col;
   i
@@ -189,7 +195,8 @@ EXPLAIN (costs off) SELECT * FROM ONLY i_col;
              QUERY PLAN
 ---------------------------------------------------------------------
  Custom Scan (ColumnarScan) on i_col
-(1 row)
+   Columnar Projected Columns: i
+(2 rows)
 
 SELECT * FROM ONLY i_col;
   i
@@ -213,7 +220,8 @@ EXPLAIN (costs off) SELECT * FROM ij_row_col;
                 QUERY PLAN
 ---------------------------------------------------------------------
  Custom Scan (ColumnarScan) on ij_row_col
-(1 row)
+   Columnar Projected Columns: i,j
+(2 rows)
 
 SELECT * FROM ij_row_col;
   i  |  j
@@ -237,7 +245,8 @@ EXPLAIN (costs off) SELECT * FROM ij_col_col;
                 QUERY PLAN
 ---------------------------------------------------------------------
  Custom Scan (ColumnarScan) on ij_col_col
-(1 row)
+   Columnar Projected Columns: i,j
+(2 rows)
 
 SELECT * FROM ij_col_col;
   i  |  j
