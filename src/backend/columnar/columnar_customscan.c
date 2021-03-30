@@ -26,8 +26,8 @@
 #include "utils/relcache.h"
 #include "utils/syscache.h"
 
-#include "columnar/columnar.h"
 #include "columnar/columnar_customscan.h"
+#include "columnar/columnar_metadata.h"
 #include "columnar/columnar_tableam.h"
 #include "distributed/listutils.h"
 

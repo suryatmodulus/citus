@@ -10,9 +10,7 @@
 
 #include "postgres.h"
 #include "distributed/pg_version_constants.h"
-#if PG_VERSION_NUM >= PG_VERSION_12
 #include "access/genam.h"
-#endif
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/index.h"
@@ -325,7 +323,7 @@ PostprocessCreateTableStmtPartitionOf(CreateStmt *createStatement, const
 		bool viaDeprecatedAPI = false;
 
 		CreateDistributedTable(relationId, parentDistributionColumn,
-							   parentDistributionMethod, ShardCount,
+							   parentDistributionMethod, ShardCount, false,
 							   parentRelationName, viaDeprecatedAPI);
 	}
 }
@@ -399,7 +397,7 @@ PostprocessAlterTableStmtAttachPartition(AlterTableStmt *alterTableStatement,
 				bool viaDeprecatedAPI = false;
 
 				CreateDistributedTable(partitionRelationId, distributionColumn,
-									   distributionMethod, ShardCount,
+									   distributionMethod, ShardCount, false,
 									   parentRelationName, viaDeprecatedAPI);
 			}
 		}
